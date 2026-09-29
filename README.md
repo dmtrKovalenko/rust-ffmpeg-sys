@@ -7,6 +7,22 @@ This crate contains low level bindings to FFmpeg. You're probably interested in 
 
 A word on versioning: major and minor versions track major and minor versions of FFmpeg, e.g. 4.2.x of this crate has been updated to support the 4.2.x series of FFmpeg. Patch level is reserved for bug fixes of this crate and does not track FFmpeg patch versions.
 
+## ffmpeg-sys-fframes: prebuilt FFmpeg
+
+`ffmpeg-sys-fframes` is `ffmpeg-sys-next` with prebuilt FFmpeg binaries, used by
+[fframes](https://github.com/dmtrKovalenko/fframes). With the `build` and `static` features the
+build script first downloads a static FFmpeg matching the target and the enabled features from
+the [`binaries-<version>` release](https://github.com/dmtrKovalenko/rust-ffmpeg-sys/releases)
+and only compiles FFmpeg from source when there is none. Archives are built by
+`.github/workflows/binaries.yml` for macOS (arm64, x86_64) and Linux (x86_64, arm64) with the
+codec sets fframes uses. External codec libraries (x264, x265) still come from the system.
+
+- `FFMPEG_FORCE_BUILD=1` always compiles from source (so do `FFMPEG_MARCH`/`FFMPEG_MTUNE`, the
+  archives are compiled with `build-portable`).
+- `FFMPEG_BINARIES_URL` overrides the download URL template (`{tag}`, `{key}`; `file://` works).
+- `FFMPEG_BINARIES_CACHE` is where downloads are kept (default: the user cache directory).
+- `FFMPEG_BINARIES_EXPORT_DIR` makes a source build write its archive there.
+
 ## Feature flags
 
 In addition to feature flags declared in `Cargo.toml`, this crate performs various compile-time version and feature detections and exposes the results in additional flags. These flags are briefly documented below; run `cargo build -vv` to view more details.

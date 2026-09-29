@@ -1,0 +1,92 @@
+# Compiles FFmpeg for the common targets and feature sets and uploads the archives to the
+# `binaries-<crate version>` release, where the build script downloads them from (see
+# build_prebuilt.rs). Run it for every version before `cargo publish`.
+name: binaries
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - fframes
+
+permissions:
+  contents: write
+
+concurrency:
+  group: binaries-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: tag
+        run: echo "tag=binaries-$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          gh release view "$TAG" > /dev/null 2>&1 || gh release create "$TAG" \
+            --target "$GITHUB_SHA" --prerelease --title "$TAG" \
+            --notes "Prebuilt static FFmpeg libraries downloaded by the ffmpeg-sys-fframes build script."
+
+  build:
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - { triple: aarch64-apple-darwin, os: macos-15, deployment: "11.0" }
+          - { triple: x86_64-apple-darwin, os: macos-15-intel, deployment: "10.13" }
+          - { triple: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
+          - { triple: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
+        # The codec features fframes-media turns on (it always adds build, static).
+        features:
+          - ""
+          - "build-lib-x264,build-license-gpl"
+          - "build-lib-x264,build-lib-x265,build-license-gpl"
+          - "build-videotoolbox"
+          - "build-lib-x264,build-license-gpl,build-videotoolbox"
+          - "build-lib-x264,build-lib-x265,build-license-gpl,build-videotoolbox"
+        exclude:
+          - { target: { triple: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }, features: "build-videotoolbox" }
+          - { target: { triple: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }, features: "build-lib-x264,build-license-gpl,build-videotoolbox" }
+          - { target: { triple: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }, features: "build-lib-x264,build-lib-x265,build-license-gpl,build-videotoolbox" }
+          - { target: { triple: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }, features: "build-videotoolbox" }
+          - { target: { triple: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }, features: "build-lib-x264,build-license-gpl,build-videotoolbox" }
+          - { target: { triple: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }, features: "build-lib-x264,build-lib-x265,build-license-gpl,build-videotoolbox" }
+    name: ${{ matrix.target.triple }} [${{ matrix.features }}]
+    runs-on: ${{ matrix.target.os }}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.target.deployment }}
+      FFMPEG_BINARIES_EXPORT_DIR: ${{ github.workspace }}/export
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install nasm pkg-config x264 x265
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends nasm pkg-config clang libx264-dev libx265-dev
+
+      - name: Compile FFmpeg
+        run: cargo build --release --target ${{ matrix.target.triple }} --features "build,static,build-portable,${{ matrix.features }}"
+
+      - name: Link the tests against it
+        run: cargo test --release --target ${{ matrix.target.triple }} --features "build,static,build-portable,${{ matrix.features }}"
+
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          test "$(cat export/tag.txt)" = "$TAG"
+          gh release upload "$TAG" export/ffmpeg-*.tar.gz --clobber

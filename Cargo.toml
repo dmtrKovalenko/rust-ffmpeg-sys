@@ -1,5 +1,5 @@
 [package]
-name    = "ffmpeg-sys-next"
+name    = "ffmpeg-sys-fframes"
 version = "9.0.0"
 build   = "build.rs"
 links   = "ffmpeg"
@@ -8,8 +8,8 @@ edition = "2024"
 authors = ["meh. <meh@schizofreni.co>", "Zhiming Wang <i@zhimingwang.org>"]
 license = "WTFPL"
 
-description = "FFI bindings to FFmpeg"
-repository  = "https://github.com/zmwangx/rust-ffmpeg-sys"
+description = "FFI bindings to FFmpeg (ffmpeg-sys-next with prebuilt FFmpeg binaries, used by fframes)"
+repository  = "https://github.com/dmtrKovalenko/rust-ffmpeg-sys"
 keywords    = ["audio", "video"]
 
 [lib]

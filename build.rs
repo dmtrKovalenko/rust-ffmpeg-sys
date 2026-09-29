@@ -11,6 +11,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str;
 
+#[path = "build_prebuilt.rs"]
+mod prebuilt;
+
 use bindgen::callbacks::{
     EnumVariantCustomBehavior, EnumVariantValue, IntKind, MacroParsingBehavior, ParseCallbacks,
 };
@@ -1082,8 +1085,37 @@ fn link_to_libraries(statik: bool, target_os: &str) {
     }
 }
 
+/// Adds the search paths of the external libraries in `EXTRALIBS` (x264, x265, vpx, ...)
+/// installed on this machine.
+fn link_search_external_libraries(extra_linker_args: &[String]) {
+    let mut search_paths: Vec<PathBuf> = extra_linker_args
+        .iter()
+        .filter_map(|flag| flag.strip_prefix("-l"))
+        .filter_map(|lib| {
+            pkg_config::Config::new()
+                .cargo_metadata(false)
+                .env_metadata(false)
+                .probe(lib)
+                .ok()
+        })
+        .flat_map(|lib| lib.link_paths)
+        .collect();
+    // libraries without a pkg-config file in the default prefixes
+    search_paths.extend(
+        ["/opt/homebrew/lib", "/usr/local/lib"]
+            .map(PathBuf::from)
+            .into_iter()
+            .filter(|path| path.exists()),
+    );
+    search_paths.dedup();
+    for path in search_paths {
+        println!("cargo:rustc-link-search=native={}", path.to_string_lossy());
+    }
+}
+
 fn main() {
     println!("cargo:rerun-if-env-changed=FFMPEG_DIR");
+    prebuilt::rerun_if_env_changed();
 
     let statik = env::var("CARGO_FEATURE_STATIC").is_ok();
     let ffmpeg_major_version: u32 = env!("CARGO_PKG_VERSION_MAJOR").parse().unwrap();
@@ -1098,14 +1130,25 @@ fn main() {
         link_to_libraries(statik, &target_os);
         if fs::metadata(search().join("lib").join("libavutil.a")).is_err() {
             fs::create_dir_all(output()).expect("failed to create build directory");
-            fetch().unwrap();
-            build(sysroot.as_deref()).unwrap();
+            if !(statik && prebuilt::try_install(&search())) {
+                fetch().unwrap();
+                build(sysroot.as_deref()).unwrap();
+                prebuilt::save_extralibs(&source().join("ffbuild/config.mak"), &search())
+                    .expect("failed to save EXTRALIBS");
+                prebuilt::export(&search()).expect("failed to export the FFmpeg binaries");
+            }
         }
 
         // Check additional required libraries.
         {
-            let config_mak = source().join("ffbuild/config.mak");
-            let file = File::open(config_mak).unwrap();
+            let extralibs = search().join(prebuilt::EXTRALIBS_FILE);
+            // FFmpeg built into this OUT_DIR by an older version of the build script
+            let extralibs = if extralibs.exists() {
+                extralibs
+            } else {
+                source().join("ffbuild/config.mak")
+            };
+            let file = File::open(extralibs).unwrap();
             let reader = BufReader::new(file);
             let extra_linker_args = reader
                 .lines()
@@ -1134,6 +1177,7 @@ fn main() {
                 .map(|lib| &lib[2..])
                 .for_each(|lib| println!("cargo:rustc-link-lib={lib}"));
 
+            let mut missing_search_path = false;
             extra_linker_args
                 .iter()
                 .filter(|v| v.starts_with("-L"))
@@ -1146,11 +1190,22 @@ fn main() {
                     }
                 })
                 .for_each(|lib_search_path| {
-                    println!(
-                        "cargo:rustc-link-search=native={}",
-                        lib_search_path.to_string_lossy()
-                    );
-                })
+                    // Paths of the machine that compiled prebuilt binaries may not exist here
+                    // (e.g. a Homebrew Cellar path of another x264 version), find the external
+                    // libraries through pkg-config instead.
+                    if lib_search_path.exists() {
+                        println!(
+                            "cargo:rustc-link-search=native={}",
+                            lib_search_path.to_string_lossy()
+                        );
+                    } else {
+                        missing_search_path = true;
+                    }
+                });
+
+            if missing_search_path {
+                link_search_external_libraries(&extra_linker_args);
+            }
         }
 
         vec![search().join("include")]
