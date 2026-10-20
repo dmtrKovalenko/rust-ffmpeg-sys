@@ -69,13 +69,30 @@ jobs:
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install nasm pkg-config x264 x265
+        run: brew install nasm pkg-config x265
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends nasm pkg-config clang libx264-dev libx265-dev
+          sudo apt-get install -y --no-install-recommends nasm pkg-config clang libx265-dev
+
+      # x264 puts its ABI version in its symbol names (x264_encoder_open_165), so an FFmpeg
+      # compiled against the runner's x264 doesn't link with the x264 of another system. The
+      # archive carries its own static x264 instead, which the linker finds before the system's.
+      - name: Compile x264
+        if: contains(matrix.features, 'x264')
+        env:
+          X264_REV: b35605ace3ddf7c1a5d67a2eb553f034aef41d55 # stable, 0.165.3222
+        run: |
+          git init -q x264
+          git -C x264 fetch -q --depth 1 https://code.videolan.org/videolan/x264.git "$X264_REV"
+          git -C x264 checkout -q FETCH_HEAD
+          cd x264
+          ./configure --prefix="$GITHUB_WORKSPACE/external" --enable-static --enable-pic --disable-cli --disable-opencl
+          make -j"$(getconf _NPROCESSORS_ONLN)" install-lib-static
+          echo "PKG_CONFIG_PATH=$GITHUB_WORKSPACE/external/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "FFMPEG_BINARIES_BUNDLE_LIBS=$GITHUB_WORKSPACE/external/lib/libx264.a" >> "$GITHUB_ENV"
 
       - name: Compile FFmpeg
         run: cargo build --release --target ${{ matrix.target.triple }} --features "build,static,build-portable,${{ matrix.features }}"
