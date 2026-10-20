@@ -17,6 +17,10 @@
 //!   directory), so that every project on the machine downloads them once.
 //! - `FFMPEG_BINARIES_EXPORT_DIR`: after compiling from source, write the archive and its key to
 //!   this directory (used by CI to produce the binaries).
+//! - `FFMPEG_BINARIES_BUNDLE_LIBS`: static libraries (a path list, like `PATH`) that are copied
+//!   into the archive's `lib/` on export. CI bundles x264 this way: its ABI version is part of
+//!   its symbol names (`x264_encoder_open_165`), so an FFmpeg compiled against one x264 doesn't
+//!   link with another, and the system's x264 differs from machine to machine.
 //!
 //! Archives are compiled with the `build-portable` flags, so setting `FFMPEG_MARCH` or
 //! `FFMPEG_MTUNE` compiles from source as well.
@@ -39,6 +43,7 @@ pub fn rerun_if_env_changed() {
         "FFMPEG_FORCE_BUILD",
         "FFMPEG_BINARIES_CACHE",
         "FFMPEG_BINARIES_EXPORT_DIR",
+        "FFMPEG_BINARIES_BUNDLE_LIBS",
         "FFMPEG_MARCH",
         "FFMPEG_MTUNE",
     ] {
@@ -203,6 +208,15 @@ pub fn export(dist: &Path) -> io::Result<()> {
         return Ok(());
     };
     fs::create_dir_all(&export_dir)?;
+    // Next to FFmpeg's own libraries, the linker finds them before the system's.
+    if let Some(libs) = env::var_os("FFMPEG_BINARIES_BUNDLE_LIBS") {
+        for lib in env::split_paths(&libs) {
+            let name = lib
+                .file_name()
+                .ok_or_else(|| io::Error::other(format!("{} is not a library", lib.display())))?;
+            fs::copy(&lib, dist.join("lib").join(name))?;
+        }
+    }
     let key = key();
     run(Command::new("tar")
         // pkg-config files hold absolute paths of the build machine
